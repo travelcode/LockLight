@@ -26,7 +26,7 @@ void SetThemeMode(HWND hWnd);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 bool IsSystemDarkMode();
 void RemoveTrayIcon(HWND hWnd);
-void ShowContextMenu(HWND hWnd);
+HMENU ShowContextMenu(HWND hWnd);
 void AddTrayIcon(HWND hWnd, HICON hIcon, UINT uID, LPCWSTR szTip);
 void SetTitleBarDarkMode(HWND hWnd, BOOL dark);
 void UpdateKeyboardIcons(HWND hWnd);
@@ -241,7 +241,7 @@ void RemoveTrayIcon(HWND hWnd) {
     Shell_NotifyIcon(NIM_DELETE, &nid);
 }
 // 处理托盘图标消息
-void ShowContextMenu(HWND hWnd) {
+HMENU ShowContextMenu(HWND hWnd) {
     HMENU hMenu = LoadMenu(hInst, MAKEINTRESOURCE(IDR_COMMONMENU));
     HMENU hSubMenu = GetSubMenu(hMenu, 0); // 获取第一个弹出菜单
     // 设置暗黑模式主题
@@ -257,18 +257,20 @@ void ShowContextMenu(HWND hWnd) {
     CheckMenuItem(hSubMenu, ID_SCROLLLOCK_TRAY, (scrollState & 0x0001) ? MF_CHECKED : MF_UNCHECKED);
     POINT pt;
     GetCursorPos(&pt);  // 获取鼠标位置
-
+    SetForegroundWindow(hWnd); // 确保菜单能接收消息
     // 显示菜单
-    TrackPopupMenu(
+    UINT cmd = TrackPopupMenu(
         hSubMenu,
         TPM_BOTTOMALIGN | TPM_LEFTALIGN,
         pt.x, pt.y,
         0,
         hWnd,
         NULL
-    );
-
+    );    if (cmd != 0) {
+        PostMessage(hWnd, WM_COMMAND, MAKEWPARAM(cmd, 0), 0);
+    }
     DestroyMenu(hMenu);
+	return hSubMenu; // 返回子菜单句柄
 }
 //
 //  函数: MyRegisterClass()
@@ -399,6 +401,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 //
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    static HMENU hCurrentMenu = NULL; // 保存当前打开的菜单
     static NOTIFYICONDATA nidCaps = { 0 };
     static NOTIFYICONDATA nidNum = { 0 };
     static NOTIFYICONDATA nidScroll = { 0 };
@@ -443,9 +446,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             SendInput(1, &input, sizeof(INPUT));
             input.ki.dwFlags = KEYEVENTF_KEYUP;
             SendInput(1, &input, sizeof(INPUT));
-
+            UpdateKeyboardIcons(hWnd);
             // 更新图标和菜单状态
             PostMessage(hWnd, WM_UPDATEICONS, 0, 0);
+            SetTimer(hWnd, IDT_UPDATE_ICONS, 50, NULL);
             break;
         }
         case ID_NUMLOCK_TRAY:
@@ -458,9 +462,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             SendInput(1, &input, sizeof(INPUT));
             input.ki.dwFlags = KEYEVENTF_KEYUP;
             SendInput(1, &input, sizeof(INPUT));
-
             // 更新图标和菜单状态
             PostMessage(hWnd, WM_UPDATEICONS, 0, 0);
+            SetTimer(hWnd, IDT_UPDATE_ICONS, 50, NULL);
             break;
         }
         case ID_SCROLLLOCK_TRAY:
@@ -473,9 +477,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             SendInput(1, &input, sizeof(INPUT));
             input.ki.dwFlags = KEYEVENTF_KEYUP;
             SendInput(1, &input, sizeof(INPUT));
-
             // 更新图标和菜单状态
             PostMessage(hWnd, WM_UPDATEICONS, 0, 0);
+            SetTimer(hWnd, IDT_UPDATE_ICONS, 50, NULL);
             break;
         }
         case ID_EXIT_TRAY:
@@ -497,9 +501,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_TRAYICON:
 	if (lParam == WM_RBUTTONUP) {
 			// 右键点击托盘图标时的操作
-			ShowContextMenu(hWnd);
+		hCurrentMenu=ShowContextMenu(hWnd);
 		}
 	break;
+	case WM_TIMER:
+        if (wParam == IDT_UPDATE_ICONS) {
+            KillTimer(hWnd, IDT_UPDATE_ICONS);
+            UpdateKeyboardIcons(hWnd);
+        }
+        break;
     case WM_PAINT:
         {
             PAINTSTRUCT ps;
@@ -542,6 +552,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         delete[] lpb;
         break;
     }
+    case WM_NCRBUTTONDOWN:
+        // 如果用户点击了非客户区（即菜单外区域）
+        if (hCurrentMenu)
+        {
+            DestroyMenu(hCurrentMenu);
+            hCurrentMenu = NULL;
+        }
+        break;
     case WM_DESTROY:
     {
         // 卸载键盘钩子
